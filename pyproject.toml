@@ -5,7 +5,7 @@ description = "A pure Python FastText model reader"
 keywords = ["nlp", "embeddings", "fasttext"]
 license = "LGPL-2.1-only"
 name = "fasttextlt"
-requires-python = ">= 3.10"
+requires-python = ">= 3.11"
 version = "0.0.0"
 
 [project.urls]

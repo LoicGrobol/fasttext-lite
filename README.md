@@ -7,9 +7,9 @@ FastText lite
 A pure[^1] Python FastText model reader, to ensure that FastText model stay usable for as long as
 possible.
 
-**This is slower than the original FastText**, for some methods by orders of
-magnitude. It's the price to pay for not using Cython or compiled code. These methods are also not
-usually bottlenecks in standard usages of FastText.
+**This is slower than the original FastText**, for some methods by orders of magnitude. It's the
+price to pay for not using Cython or compiled code. These methods are also not usually bottlenecks
+in standard uses of FastText.
 
 FastText has been in maintenance mode for some time, with no indication that it will ever change. In
 the absence of further releases, it will stay stuck in increasingly obsolete Python version and get
