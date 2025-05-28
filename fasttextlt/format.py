@@ -12,6 +12,8 @@ See Also
 
 """
 
+# NOTE: see end of file for a description of the binary format
+
 import collections
 import gzip
 import io
@@ -43,7 +45,9 @@ _FASTTEXT_FILEFORMAT_MAGIC = np.int32(793712314)
 # _NEW_HEADER_FORMAT is constructed on the basis of args::save method, see
 # https://github.com/facebookresearch/fastText/blob/master/src/args.cc
 
-_NEW_HEADER_FORMAT = [
+# FIXME: everywhere in this file, we assume we are try to load a model saved on a platform with the
+# same endianness as ours. This might be an issue sometimes.
+_NEW_HEADER_FORMAT: list[tuple[str, Literal["i", "d"]]] = [
     ("dim", "i"),
     ("ws", "i"),
     ("epoch", "i"),
@@ -59,7 +63,7 @@ _NEW_HEADER_FORMAT = [
     ("t", "d"),
 ]
 
-_OLD_HEADER_FORMAT = [
+_OLD_HEADER_FORMAT: list[tuple[str, Literal["i", "d"]]] = [
     ("epoch", "i"),
     ("min_count", "i"),
     ("neg", "i"),
@@ -297,6 +301,7 @@ def _load_matrix(
     )
 
 
+# FIXME: Python already has buffered read so do we really need this?
 def _batched_generator(
     in_stream: BinaryIO, count: int, batch_size: int = 1_000_000
 ) -> Iterable[float]:
@@ -400,69 +405,7 @@ def _conv_field_to_bytes(field_value: Any, field_type: Literal["i", "d"]) -> byt
         )
 
 
-# def _get_field_from_model(model, field):
-#     """
-#     Extract `field` from `model`.
-
-#     Parameters
-#     ----------
-#     model: gensim.models.fasttext.FastText
-#         model from which `field` is extracted
-#     field: str
-#         requested field name, fields are listed in the `_NEW_HEADER_FORMAT` list
-#     """
-#     if field == "bucket":
-#         return model.wv.bucket
-#     elif field == "dim":
-#         return model.vector_size
-#     elif field == "epoch":
-#         return model.epochs
-#     elif field == "loss":
-#         # `loss` => hs: 1, ns: 2, softmax: 3, ova-vs-all: 4
-#         # ns = negative sampling loss (default)
-#         # hs = hierarchical softmax loss
-#         # softmax =  softmax loss
-#         # one-vs-all = one vs all loss (supervised)
-#         if model.hs == 1:
-#             return 1
-#         elif model.hs == 0:
-#             return 2
-#         elif model.hs == 0 and model.negative == 0:
-#             return 1
-#     elif field == "maxn":
-#         return model.wv.max_n
-#     elif field == "minn":
-#         return model.wv.min_n
-#     elif field == "min_count":
-#         return model.min_count
-#     elif field == "model":
-#         # `model` => cbow:1, sg:2, sup:3
-#         # cbow = continous bag of words (default)
-#         # sg = skip-gram
-#         # sup = supervised
-#         return 2 if model.sg == 1 else 1
-#     elif field == "neg":
-#         return model.negative
-#     elif field == "t":
-#         return model.sample
-#     elif field == "word_ngrams":
-#         # This is skipped in gensim loading setting, using the default from FB C++ code
-#         return 1
-#     elif field == "ws":
-#         return model.window
-#     elif field == "lr_update_rate":
-#         # This is skipped in gensim loading setting, using the default from FB C++ code
-#         return 100
-#     else:
-#         msg = (
-#             'Extraction of header field "'
-#             + field
-#             + '" from Gensim FastText object not implemmented.'
-#         )
-#         raise NotImplementedError(msg)
-
-
-def _args_save(out_stream, model, fb_fasttext_parameters):
+def _args_save(out_stream: BinaryIO, model: Model):
     """
     Saves header with `model` parameters to the binary stream `out_stream` containing a model in the
     Facebook's native fastText `.bin` format.
@@ -474,23 +417,16 @@ def _args_save(out_stream, model, fb_fasttext_parameters):
     ----------
     out_stream: writeable binary stream
         stream to which model is saved
-    model: gensim.models.fasttext.FastText
+    model: Model
         saved model
-    fb_fasttext_parameters: dictionary
-        dictionary contain parameters containing `lr_update_rate`, `word_ngrams` unused by gensim
-        implementation, so they have to be provided externally
     """
     for field, field_type in _NEW_HEADER_FORMAT:
-        if field in fb_fasttext_parameters:
-            field_value = fb_fasttext_parameters[field]
-        else:
-            field_value = _get_field_from_model(model, field)
-        out_stream.write(_conv_field_to_bytes(field_value, field_type))
+        out_stream.write(_conv_field_to_bytes(getattr(Model, field), field_type))
 
 
-def _dict_save(out_stream, model, encoding):
+def _dict_save(out_stream: BinaryIO, model: Model, encoding: str = "utf-8"):
     """
-    Saves the dictionary from `model` to the to the binary stream `out_stream` containing a model in the Facebook's
+    Saves the dictionary from `model` to the binary stream `out_stream` containing a model in the Facebook's
     native fastText `.bin` format.
 
     Name mimics the original C++ implementation
@@ -512,9 +448,9 @@ def _dict_save(out_stream, model, encoding):
     # In the unsupervised case we have only words (no labels). Hence both fields
     # are equal.
 
-    out_stream.write(np.int32(len(model.wv)).tobytes())
+    out_stream.write(np.int32(model.nwords).tobytes())
 
-    out_stream.write(np.int32(len(model.wv)).tobytes())
+    out_stream.write(np.int32(model.nwords).tobytes())
 
     # nlabels=0 <- no labels  we are in unsupervised mode
     out_stream.write(np.int32(0).tobytes())
@@ -653,3 +589,54 @@ def save(model, out_stream, fb_fasttext_parameters, encoding):
             _save_to_stream(model, out_stream_stream, fb_fasttext_parameters, encoding)
     else:
         _save_to_stream(model, out_stream, fb_fasttext_parameters, encoding)
+
+
+# It would have been amazing if FastText had provided this somewhere but :))
+
+# File format:
+# - Prelude:
+#   - 32b: int32 magic
+#   - 32b: int32 version
+# - Header (new format):
+#   - 32b: int32 dim  # Absent in old format
+#   - 32b: int32 ws  # Absent in old format
+#   - 32b: int32 epoch
+#   - 32b: int32 min_count
+#   - 32b: int32 neg
+#   - 32b: int32 word_ngram
+#   - 32b: int32 loss
+#   - 32b: int32 model
+#   - 32b: int32 bucket
+#   - 32b: int32 minn
+#   - 32b: int32 maxn
+#   - 32b: int32 lr_update_rate
+#   - 64b: float64 t
+# - Vocab:
+#   - Prelude:  # vocab_size == nwords + nlabels?
+#     - 32b: int32 vocab_size
+#     - 32b: int32 nwords
+#     - 32b: int32 nlabels  # 0 for unsupervised models
+#     - 64b: int64 ntokens
+#     - 64b: int64 pruneidx_size  # Absent in old format
+#   - Content:
+#     - vocab_size*
+#       - Word:  # 0x00-terminated string
+#         - *
+#           - 8b: char c
+#         - 8b: 0x00  # _END_OF_WORD_MARKER
+#       - 64b: int64 count
+#       - 8b: int8 entry_type  # 0x00 (_DICT_WORD_ENTRY_TYPE_MARKER) for words
+#    - Pruned Index:
+#      - prunedidx_size*
+#        - 32b: int32 ?
+#        - 32b: int32 ?
+# - Input Vectors:  # aka vectors_ngrams
+#   - 1b: bool quant_input  # absent in old format
+#   - 64b: int64 num_vectors
+#   - 64b: int64 dim
+#   - num_vectors*dim*float_sizeb: matrix  # numpy-compatible don't worry about it
+# - Output Vectors:  # aka hidden_output
+#   - 1b: bool quant_input  # absent in old format
+#   - 64b: int64 num_vectors
+#   - 64b: int64 dim
+#   - (num_vectors*dim*float_size)b: matrix  # numpy-compatible don't worry about it
