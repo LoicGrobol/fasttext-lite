@@ -2,7 +2,7 @@ import pathlib
 from typing import Self, cast
 import numpy as np
 
-from fasttextlt.fasttext_bin import load, Model
+from fasttextlt.format import load, Model
 
 
 # Converted from Gensim CPython code, convergent with

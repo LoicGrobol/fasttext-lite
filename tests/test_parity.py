@@ -6,7 +6,7 @@ import fasttext
 from hypothesis import given, strategies as st
 
 from fasttextlt.fasttext import FastText as FastTextLt
-from fasttextlt.fasttext_bin import load
+from fasttextlt.format import load
 
 
 def test_load_parity(model_path: pathlib.Path):

@@ -1,5 +1,5 @@
 import pathlib
-from fasttextlt.fasttext_bin import load, Model
+from fasttextlt.format import load, Model
 
 
 def test_load_model(model_path: pathlib.Path):
