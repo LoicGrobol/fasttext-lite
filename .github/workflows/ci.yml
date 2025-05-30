@@ -28,7 +28,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
-          cache-suffix: py${{ matrix.python-version }}-${{ matrix.os }}
+          cache-suffix: lint-py${{ matrix.python-version }}-${{ matrix.os }}
           enable-cache: true
       - name: Lint with ruff
         run: |
@@ -57,7 +57,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
-          cache-suffix: py${{ matrix.python-version }}-${{ matrix.os }}
+          cache-suffix: test-py${{ matrix.python-version }}-${{ matrix.os }}
           enable-cache: true
       - name: Run tox
         run: |
@@ -69,8 +69,8 @@ jobs:
         with:
           name: hypothesis-example-db-py${{ matrix.python-version }}-${{ matrix.os}}
           path: .hypothesis/examples
-  build_wheels:
-    name: Build wheels for Python ${{ matrix.python-version }} on ${{ matrix.os }}
+  build:
+    name: Build wheels and sdist
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -84,39 +84,16 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
-          cache-suffix: py${{ matrix.python-version }}-${{ matrix.os }}
+          cache-suffix: build-py${{ matrix.python-version }}-${{ matrix.os }}
           enable-cache: true
       - name: Build wheels
-        run: uv build --python ${{ matrix.python-version }} --wheel
+        run: uv build --python ${{ matrix.python-version }} --wheel --sdist
       - uses: actions/upload-artifact@v4
         with:
           name: dist-wheel
           path: ./dist/*.whl
-  build_sdist:
-    name: Build source distribution
-    strategy:
-      matrix:
-        os:
-          - ubuntu-latest
-        python-version:
-          - "3.13"
-    runs-on: ${{ matrix.os }}
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          cache-suffix: py${{ matrix.python-version }}-${{ matrix.os }}
-          enable-cache: true
-      - name: Build wheels
-        run: uv build --python ${{ matrix.python-version }} --sdist
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dist-sdist
-          path: dist/*.tar.gz
   upload_pypi:
-    needs: [build_wheels, build_sdist]
+    needs: build
     runs-on: ubuntu-latest
     if: >
       (github.event_name == 'release' && github.event.action == 'published')
