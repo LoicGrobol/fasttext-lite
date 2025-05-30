@@ -265,7 +265,6 @@ def _load_matrix(
     num_vectors, dim = cast(tuple[int, int], read_unpack(in_stream, "@2q"))
     count = num_vectors * dim
 
-    #
     # numpy.fromfile doesn't play well with gzip.GzipFile as input:
     #
     # - https://github.com/RaRe-Technologies/gensim/pull/2476
@@ -274,7 +273,7 @@ def _load_matrix(
     # Until they fix it, we have to apply a workaround.  We only apply the
     # workaround when it's necessary, because np.fromfile is heavily optimized
     # and very efficient (when it works).
-    #
+
     if isinstance(in_stream, (gzip.GzipFile, bz2.BZ2File, lzma.LZMAFile)):
         logger.warning(
             "Loading model from a compressed file. This can be slow."
@@ -284,18 +283,18 @@ def _load_matrix(
         matrix = np.frombuffer(in_stream.read(count * _FLOAT_SIZE), dtype=_FLOAT_DTYPE)
     else:
         matrix = np.fromfile(in_stream, _FLOAT_DTYPE, count)
-        # matrix = np.fromfile(in_stream, _FLOAT_DTYPE, count)
 
     if matrix.shape != (count,):
         raise ValueError(f"Wrong matrix size: expected `{(count,)}`,  got `{matrix.shape!r}`")
 
     return cast(
-        np.ndarray[tuple[int, int], np.dtype[np.floating]], matrix.reshape((num_vectors, dim))
+        np.ndarray[tuple[int, int], np.dtype[np.floating]],
+        matrix.reshape((num_vectors, dim), copy=False),
     )
 
 
 # TODO: use memmap if possible for the large arrays
-def load(in_stream: BinaryIO, encoding: str = "utf-8", full_model: bool = True) -> Model:
+def load(in_stream: BinaryIO, encoding: str = "utf-8", full_model: bool = False) -> Model:
     """Load a model from a binary stream.
 
     Parameters
