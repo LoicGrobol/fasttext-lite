@@ -235,37 +235,6 @@ def _load_vocab(
     return raw_vocab, vocab_size, nwords, ntokens
 
 
-_DTYPE_T = TypeVar("_DTYPE_T", bound=np.dtype)
-
-
-def _fromfile(
-    in_stream: BinaryIO, dtype: _DTYPE_T, count: int, batch_size: int | None = 1_000_000
-) -> np.ndarray[tuple[int], _DTYPE_T]:
-    """Reimplementation of numpy.fromfile, assuming in_stream only contains @f floats."""
-    if batch_size is None or count < batch_size:
-        return cast(
-            np.ndarray[tuple[int], _DTYPE_T],
-            np.frombuffer(in_stream.read(count * _FLOAT_SIZE), dtype=_FLOAT_DTYPE).astype(
-                dtype=dtype, copy=False
-            ),
-        )
-    else:
-        # TODO: do we actually need this? since we need to load everything in memory anyway, using a
-        # zero-copy buffer should be enough?
-        res = np.empty((count,), dtype=dtype)
-        # TODO: optimize to take advantage of python buffered read
-        for i in range(0, count // batch_size):
-            batch = in_stream.read(_FLOAT_SIZE * batch_size)
-            res[i * batch_size : i * batch_size + batch_size] = np.frombuffer(
-                batch, dtype=_FLOAT_DTYPE
-            )
-        res[batch_size * (count // batch_size) :] = np.frombuffer(
-            in_stream.read(_FLOAT_SIZE * (count % batch_size)), dtype=_FLOAT_DTYPE
-        )
-
-    return res
-
-
 def _load_matrix(
     in_stream: BinaryIO, new_format: bool = True
 ) -> np.ndarray[tuple[int, int], np.dtype[np.floating]]:
@@ -312,7 +281,7 @@ def _load_matrix(
             " This is a work-around for a bug in NumPy: <https://github.com/numpy/numpy/issues/13470>."
             " Consider decompressing your model file for a faster load. "
         )
-        matrix = _fromfile(in_stream, _FLOAT_DTYPE, count)
+        matrix = np.frombuffer(in_stream.read(count * _FLOAT_SIZE), dtype=_FLOAT_DTYPE)
     else:
         matrix = np.fromfile(in_stream, _FLOAT_DTYPE, count)
         # matrix = np.fromfile(in_stream, _FLOAT_DTYPE, count)
