@@ -12,13 +12,20 @@ from fasttextlt.format import load
 def test_load_parity(model_path: pathlib.Path):
     ft_model = fasttext.load_model(str(model_path))
     with open(model_path, "rb") as in_stream:
-        ftlt_model = load(in_stream)
+        ftlt_model = load(in_stream, full_model=True)
 
-    ft_matrix = np.array(ft_model.f.getInputMatrix(), copy=False)
-    ftlt_matrix = ftlt_model.vectors_ngrams
-    assert_equal(ftlt_matrix, ft_matrix)
     for i, word in enumerate(ftlt_model.raw_vocab):
         assert ft_model.get_word_id(word) == i
+
+    # FIXME: can we save memory here somehow?
+
+    ft_input_matrix = np.array(ft_model.f.getInputMatrix(), copy=False)
+    ftlt_input_matrix = ftlt_model.vectors_ngrams
+    assert_equal(ftlt_input_matrix, ft_input_matrix)
+
+    ft_output_matrix = np.array(ft_model.f.getOutputMatrix(), copy=False)
+    ftlt_output_matrix = ftlt_model.hidden_output
+    assert_equal(ftlt_output_matrix, ft_output_matrix)
 
 
 @given(
