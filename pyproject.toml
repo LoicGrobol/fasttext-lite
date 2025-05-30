@@ -6,7 +6,7 @@ keywords = ["nlp", "embeddings", "fasttext"]
 license = "LGPL-2.1-only"
 name = "fasttextlt"
 requires-python = ">= 3.11"
-version = "0.0.0"
+version = "0.1.0"
 
 [project.urls]
 "Bug Tracker" = "https://github.com/LoicGrobol/fasttextlt/issues"
