@@ -21,10 +21,9 @@ import io
 import logging
 import lzma
 import struct
-from typing import Any, BinaryIO, Literal, NamedTuple, TypeVar, cast
+from typing import Any, BinaryIO, Literal, NamedTuple, cast
 
 import numpy as np
-import xopen
 
 _END_OF_WORD_MARKER = b"\x00"
 
@@ -293,7 +292,6 @@ def _load_matrix(
     )
 
 
-# TODO: use memmap if possible for the large arrays
 def load(in_stream: BinaryIO, encoding: str = "utf-8", full_model: bool = False) -> Model:
     """Load a model from a binary stream.
 
@@ -323,19 +321,22 @@ def load(in_stream: BinaryIO, encoding: str = "utf-8", full_model: bool = False)
         model = {name: read_unpack(in_stream, fmt)[0] for (name, fmt) in _HEADER_FORMAT[2:]}
 
     raw_vocab, vocab_size, nwords, ntokens = _load_vocab(in_stream, new_format, encoding=encoding)
-    model.update(raw_vocab=raw_vocab, vocab_size=vocab_size, nwords=nwords, ntokens=ntokens)
+    model.update({
+        "raw_vocab": raw_vocab,
+        "vocab_size": vocab_size,
+        "nwords": nwords,
+        "ntokens": ntokens,
+    })
 
-    vectors_ngrams = _load_matrix(in_stream, new_format=new_format)
+    model["vectors_ngrams"] = _load_matrix(in_stream, new_format=new_format)
 
-    if not full_model:
-        hidden_output = None
-    else:
-        hidden_output = _load_matrix(in_stream, new_format=new_format)
+    if full_model:
+        model["hidden_output"] = _load_matrix(in_stream, new_format=new_format)
         if in_stream.read() != b"":
             raise ValueError("expected to reach EOF")
+    else:
+        model["hidden_output"] = None
 
-    model.update(vectors_ngrams=vectors_ngrams, hidden_output=hidden_output)
-    model = {k: v for k, v in model.items() if k in _FIELD_NAMES}
     return Model(**model)
 
 
@@ -374,7 +375,7 @@ def _conv_field_to_bytes(field_value: Any, field_type: Literal["i", "d"]) -> byt
         return np.float64(field_value).tobytes()
     else:
         raise NotImplementedError(
-            f'Currently conversion to "{field_type}" type is not implemmented.'
+            f'Currently conversion to "{field_type}" type is not implemented.'
         )
 
 
