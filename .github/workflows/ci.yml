@@ -46,7 +46,7 @@ jobs:
         os:
           - ubuntu-latest
           - macos-latest
-          - windows-latest
+          # - windows-latest
         python-version:
           - "3.11"
           - "3.12"
@@ -76,7 +76,7 @@ jobs:
         os:
           - ubuntu-latest
           - macos-latest
-          # - windows-latest
+          - windows-latest
         python-version:
           - "3.11"
           - "3.12"
