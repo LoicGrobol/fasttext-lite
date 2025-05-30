@@ -73,8 +73,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest]
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
         python-version:
+          - "3.11"
+          - "3.12"
           - "3.13"
     needs: test
     steps:
