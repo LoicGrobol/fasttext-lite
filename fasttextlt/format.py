@@ -14,14 +14,17 @@ See Also
 
 # NOTE: see end of file for a description of the binary format
 
+import bz2
 import collections
 import gzip
 import io
 import logging
+import lzma
 import struct
-from typing import Any, BinaryIO, Iterable, Literal, NamedTuple, cast
+from typing import Any, BinaryIO, Literal, NamedTuple, TypeVar, cast
 
 import numpy as np
+import xopen
 
 _END_OF_WORD_MARKER = b"\x00"
 
@@ -63,6 +66,7 @@ _HEADER_FORMAT: list[tuple[str, Literal["i", "d"]]] = [
     ("t", "d"),
 ]
 
+# FIXME: why are we looking at the machine float type? what matters is the file float type?
 _FLOAT_SIZE = struct.calcsize("@f")
 # FIXME: In 3.12+, we should have a type alias here?
 if _FLOAT_SIZE == 4:
@@ -231,6 +235,37 @@ def _load_vocab(
     return raw_vocab, vocab_size, nwords, ntokens
 
 
+_DTYPE_T = TypeVar("_DTYPE_T", bound=np.dtype)
+
+
+def _fromfile(
+    in_stream: BinaryIO, dtype: _DTYPE_T, count: int, batch_size: int | None = 1_000_000
+) -> np.ndarray[tuple[int], _DTYPE_T]:
+    """Reimplementation of numpy.fromfile, assuming in_stream only contains @f floats."""
+    if batch_size is None or count < batch_size:
+        return cast(
+            np.ndarray[tuple[int], _DTYPE_T],
+            np.frombuffer(in_stream.read(count * _FLOAT_SIZE), dtype=_FLOAT_DTYPE).astype(
+                dtype=dtype, copy=False
+            ),
+        )
+    else:
+        # TODO: do we actually need this? since we need to load everything in memory anyway, using a
+        # zero-copy buffer should be enough?
+        res = np.empty((count,), dtype=dtype)
+        # TODO: optimize to take advantage of python buffered read
+        for i in range(0, count // batch_size):
+            batch = in_stream.read(_FLOAT_SIZE * batch_size)
+            res[i * batch_size : i * batch_size + batch_size] = np.frombuffer(
+                batch, dtype=_FLOAT_DTYPE
+            )
+        res[batch_size * (count // batch_size) :] = np.frombuffer(
+            in_stream.read(_FLOAT_SIZE * (count % batch_size)), dtype=_FLOAT_DTYPE
+        )
+
+    return res
+
+
 def _load_matrix(
     in_stream: BinaryIO, new_format: bool = True
 ) -> np.ndarray[tuple[int, int], np.dtype[np.floating]]:
@@ -271,15 +306,16 @@ def _load_matrix(
     # workaround when it's necessary, because np.fromfile is heavily optimized
     # and very efficient (when it works).
     #
-    if isinstance(in_stream, gzip.GzipFile):
+    if isinstance(in_stream, (gzip.GzipFile, bz2.BZ2File, lzma.LZMAFile)):
         logger.warning(
-            "Loading model from a compressed .gz file.  This can be slow. "
-            "This is a work-around for a bug in NumPy: <https://github.com/numpy/numpy/issues/13470>."
+            "Loading model from a compressed file. This can be slow."
+            " This is a work-around for a bug in NumPy: <https://github.com/numpy/numpy/issues/13470>."
             " Consider decompressing your model file for a faster load. "
         )
         matrix = _fromfile(in_stream, _FLOAT_DTYPE, count)
     else:
         matrix = np.fromfile(in_stream, _FLOAT_DTYPE, count)
+        # matrix = np.fromfile(in_stream, _FLOAT_DTYPE, count)
 
     if matrix.shape != (count,):
         raise ValueError(f"Wrong matrix size: expected `{(count,)}`,  got `{matrix.shape!r}`")
@@ -289,32 +325,7 @@ def _load_matrix(
     )
 
 
-# FIXME: Python already has buffered read so do we really need this?
-def _batched_generator(
-    in_stream: BinaryIO, count: int, batch_size: int = 1_000_000
-) -> Iterable[float]:
-    """Read `count` floats from `in_stream`.
-
-    Batches up read calls to avoid I/O overhead.  Keeps no more than batch_size
-    floats in memory at once.
-    """
-    while count > batch_size:
-        batch = cast(tuple[float, ...], read_unpack(in_stream, f"@{batch_size}f"))
-        yield from batch
-        count -= batch_size
-
-    batch = cast(tuple[float, ...], read_unpack(in_stream, f"@{count}f"))
-    yield from batch
-
-
-def _fromfile(in_stream: BinaryIO, dtype: np.dtype, count: int) -> np.ndarray[tuple[int], np.dtype]:
-    """Reimplementation of numpy.fromfile."""
-    return cast(
-        np.ndarray[tuple[int], np.dtype],
-        np.fromiter(_batched_generator(in_stream, count), dtype=dtype),
-    )
-
-
+# TODO: use memmap if possible for the large arrays
 def load(in_stream: BinaryIO, encoding: str = "utf-8", full_model: bool = True) -> Model:
     """Load a model from a binary stream.
 

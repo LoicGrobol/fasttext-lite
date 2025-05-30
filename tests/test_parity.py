@@ -45,5 +45,6 @@ def test_load_parity(model_path: pathlib.Path):
 def test_subwords_parity(models: tuple[FastTextLt, fasttext.FastText._FastText], word: str):
     ftlt_model, ft_model = models
     ft_ngrams, ft_subword_ids = ft_model.get_subwords(word)
+    # FIXME: support computing ngrams, then test ngrams
     subword_ids = ftlt_model.get_subword_ids(word)
     assert_equal(ft_subword_ids, subword_ids)
