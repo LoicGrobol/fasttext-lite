@@ -1,5 +1,8 @@
+import bz2
+import gzip
+import lzma
 import pathlib
-from typing import Self, cast
+from typing import BinaryIO, Self, cast
 import numpy as np
 
 from fasttextlt.format import load, Model
@@ -66,7 +69,7 @@ def ft_hash(stream: bytes) -> np.uint32:
     res = FNV_1_32_OFFSET_BASIS
 
     # The loop is annoying, but no way out of it in pure Python, even with np trickery
-    for b in np.frombuffer(stream, dtype=np.int8).astype(np.uint32):
+    for b in np.frombuffer(stream, dtype=np.int8).astype(dtype=np.uint32, copy=False):
         res ^= b
         res *= FNV_1_32_PRIME
     return res
@@ -127,7 +130,7 @@ def ft_ngram_hashes(
         h = FNV_1_32_OFFSET_BASIS.copy()
         for j in range(i, min(n_chars, i + max_n)):
             # `frombuffer` is no-copy yay
-            for b in np.frombuffer(encodings[j], np.int8).astype(np.uint32):
+            for b in np.frombuffer(encodings[j], dtype=np.int8).astype(np.uint32, copy=False):
                 h ^= b
                 h *= FNV_1_32_PRIME
             # Skip "<"
@@ -172,6 +175,16 @@ class FastText:
     # TODO: support gz? support byteIO?
     @classmethod
     def load_model(cls, path: str | pathlib.Path) -> Self:
-        with open(path, "rb") as in_stream:
-            model = load(in_stream)
+        path = pathlib.Path(path)
+        match path.suffix:
+            case ".bz2":
+                opener = bz2.open
+            case ".gz":
+                opener = gzip.open
+            case ".xz":
+                opener = lzma.open
+            case _:
+                opener = open
+        with opener(path, "rb") as in_stream:
+            model = load(cast(BinaryIO, in_stream))
         return cls(model)
