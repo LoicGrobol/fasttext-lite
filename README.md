@@ -1,8 +1,10 @@
 FastText lite
 =============
 
-[![Latest PyPI version](https://img.shields.io/pypi/v/fasttextlt.svg)](https://pypi.org/project/fasttextlt)
-[![Build status](https://github.com/LoicGrobol/fasttextlt/actions/workflows/ci.yml/badge.svg)](https://github.com/LoicGrobol/fasttext-lite/actions/workflows/ci.yml)
+[![Latest PyPI
+version](https://img.shields.io/pypi/v/fasttextlt.svg)](https://pypi.org/project/fasttextlt)
+[![Build
+status](https://github.com/LoicGrobol/fasttextlt/actions/workflows/ci.yml/badge.svg)](https://github.com/LoicGrobol/fasttext-lite/actions/workflows/ci.yml)
 
 A pure[^1] Python FastText model reader, to ensure that FastText model stay usable for as long as
 possible.

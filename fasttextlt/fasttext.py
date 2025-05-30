@@ -5,7 +5,7 @@ import pathlib
 from typing import BinaryIO, Self, cast
 import numpy as np
 
-from fasttextlt.format import load, Model
+from fasttextlt.format import load, Model, save
 
 
 # Converted from Gensim CPython code, convergent with
@@ -143,6 +143,7 @@ def ft_ngram_hashes(
     return res
 
 
+# TODO: repr, str
 class FastText:
     def __init__(self, model: Model):
         self.model = model
@@ -172,19 +173,31 @@ class FastText:
         else:
             return subword_ids
 
-    # TODO: support gz? support byteIO?
+    def save_model(self, path: str | pathlib.Path):
+        with open(path, "wb") as out_stream:
+            save(self.model, out_stream)
+
+    # - TODO: support byteIO?
+    # - TODO: support mmap? How to make sure it's closed then? With another function? by accepting a
+    #   bytesio and letting the user get it from mmap?
+    # - TODO: support zstd for 3.14?
     @classmethod
-    def load_model(cls, path: str | pathlib.Path) -> Self:
+    def load_model(cls, path: str | pathlib.Path, full_model: bool = False) -> Self:
+        """Load a FastText model from a file."""
         path = pathlib.Path(path)
         match path.suffix:
             case ".bz2":
                 opener = bz2.open
+                safe_load = True
             case ".gz":
                 opener = gzip.open
+                safe_load = True
             case ".xz":
                 opener = lzma.open
+                safe_load = True
             case _:
                 opener = open
+                safe_load = False
         with opener(path, "rb") as in_stream:
-            model = load(cast(BinaryIO, in_stream))
+            model = load(cast(BinaryIO, in_stream), full_model=full_model, safe_load=safe_load)
         return cls(model)
