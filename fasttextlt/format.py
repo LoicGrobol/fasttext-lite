@@ -394,14 +394,14 @@ def _args_save(out_stream: BinaryIO, model: Model):
     model: Model
         saved model
     """
-    for field, field_type in _NEW_HEADER_FORMAT:
+    for field, field_type in _HEADER_FORMAT:
         out_stream.write(_conv_field_to_bytes(getattr(Model, field), field_type))
 
 
 def _dict_save(out_stream: BinaryIO, model: Model, encoding: str = "utf-8"):
     """
-    Saves the dictionary from `model` to the binary stream `out_stream` containing a model in the Facebook's
-    native fastText `.bin` format.
+    Saves the dictionary from `model` to the binary stream `out_stream` containing a model in the
+    Facebook's native fastText `.bin` format.
 
     Name mimics the original C++ implementation
     [Dictionary::save](https://github.com/facebookresearch/fastText/blob/master/src/dictionary.cc)
@@ -496,6 +496,7 @@ def _input_save(out_stream, model):
 #     out_stream.write(hidden_output.tobytes())
 
 
+# FIXME: doesn't work yet
 def _save_to_stream(model, out_stream, fb_fasttext_parameters, encoding):
     """
     Saves word embeddings to binary stream `out_stream` using the Facebook's native fasttext `.bin` format.
@@ -527,7 +528,7 @@ def _save_to_stream(model, out_stream, fb_fasttext_parameters, encoding):
     )  # Save 'quot_', which is False for unsupervised models
 
     # Save output layers of the model
-    _output_save(out_stream, model)
+    # _output_save(out_stream, model)
 
 
 def save(model, out_stream, fb_fasttext_parameters, encoding):
