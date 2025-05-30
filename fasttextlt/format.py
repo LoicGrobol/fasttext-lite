@@ -47,23 +47,9 @@ _FASTTEXT_FILEFORMAT_MAGIC = np.int32(793712314)
 
 # FIXME: everywhere in this file, we assume we are try to load a model saved on a platform with the
 # same endianness as ours. This might be an issue sometimes.
-_NEW_HEADER_FORMAT: list[tuple[str, Literal["i", "d"]]] = [
+_HEADER_FORMAT: list[tuple[str, Literal["i", "d"]]] = [
     ("dim", "i"),
     ("ws", "i"),
-    ("epoch", "i"),
-    ("min_count", "i"),
-    ("neg", "i"),
-    ("word_ngrams", "i"),  # Unused in gensim
-    ("loss", "i"),
-    ("model", "i"),
-    ("bucket", "i"),
-    ("minn", "i"),
-    ("maxn", "i"),
-    ("lr_update_rate", "i"),  # Unused in gensim
-    ("t", "d"),
-]
-
-_OLD_HEADER_FORMAT: list[tuple[str, Literal["i", "d"]]] = [
     ("epoch", "i"),
     ("min_count", "i"),
     ("neg", "i"),
@@ -86,13 +72,12 @@ elif _FLOAT_SIZE == 8:
 else:
     raise ValueError(f"Unsupported float size {_FLOAT_SIZE}")
 
+_INT_SIZE = struct.calcsize("@i")
+_BOOL_SIZE = struct.calcsize("@?")
+
 _FIELD_NAMES = sorted(
     set([
-        *(
-            name
-            for name, _ in (*_OLD_HEADER_FORMAT, *_NEW_HEADER_FORMAT)
-            if not name.startswith("_")
-        ),
+        *(name for name, _ in _HEADER_FORMAT),
         "raw_vocab",
         "vocab_size",
         "nwords",
@@ -170,7 +155,7 @@ class Model(NamedTuple):
     ntokens: int
 
 
-def _struct_unpack(in_stream: BinaryIO, fmt: str) -> tuple[Any, ...]:
+def read_unpack(in_stream: BinaryIO, fmt: str) -> tuple[Any, ...]:
     num_bytes = struct.calcsize(fmt)
     data = in_stream.read(num_bytes)
     return struct.unpack(fmt, data)
@@ -201,7 +186,7 @@ def _load_vocab(
         The number of words.
         The number of tokens.
     """
-    vocab_size, nwords, nlabels = _struct_unpack(in_stream, "@3i")
+    vocab_size, nwords, nlabels = cast(tuple[int, int, int], read_unpack(in_stream, "@3i"))
 
     # Vocab stored by [Dictionary::save](https://github.com/facebookresearch/fastText/blob/master/src/dictionary.cc)
     # TODO: This could also just be an invalid file
@@ -209,12 +194,12 @@ def _load_vocab(
         raise NotImplementedError("Supervised fastText models are not supported")
     logger.info(f"loading {vocab_size} words for fastText model from {in_stream.name}")
 
-    ntokens = _struct_unpack(in_stream, "@q")[0]  # number of tokens
+    (ntokens,) = cast(tuple[int], read_unpack(in_stream, "@q"))  # number of tokens
 
     if new_format:
-        (pruneidx_size,) = cast(tuple[int], _struct_unpack(in_stream, "@q"))
+        (pruneidx_size,) = cast(tuple[int], read_unpack(in_stream, "@q"))
     else:
-        pruneidx_size = None
+        pruneidx_size = 0
 
     raw_vocab = collections.OrderedDict()
     for _ in range(vocab_size):
@@ -234,12 +219,14 @@ def _load_vocab(
                 f"failed to decode invalid unicode bytes {word_bytes!r};"
                 f" replacing invalid characters, using {word!r}",
             )
-        count, _ = cast(tuple[int, int], _struct_unpack(in_stream, "@qb"))
+        count, _ = cast(tuple[int, bytes], read_unpack(in_stream, "@qb"))
         raw_vocab[word] = count
 
-    if pruneidx_size is not None:
-        for _ in range(pruneidx_size):
-            _struct_unpack(in_stream, "@2i")
+    if pruneidx_size > 0:
+        in_stream.seek(pruneidx_size * 2 * _INT_SIZE, 1)
+        # TODO: why are we skipping these
+        # for _ in range(pruneidx_size):
+        #     read_unpack(in_stream, "@2i")
 
     return raw_vocab, vocab_size, nwords, ntokens
 
@@ -268,9 +255,10 @@ def _load_matrix(
 
     """
     if new_format:
-        _struct_unpack(in_stream, "@?")  # bool quant_input in fasttext.cc
+        in_stream.seek(_BOOL_SIZE, 1)
+        # read_unpack(in_stream, "@?")  # bool quant_input in fasttext.cc
 
-    num_vectors, dim = cast(tuple[int, int], _struct_unpack(in_stream, "@2q"))
+    num_vectors, dim = cast(tuple[int, int], read_unpack(in_stream, "@2q"))
     count = num_vectors * dim
 
     #
@@ -311,11 +299,11 @@ def _batched_generator(
     floats in memory at once.
     """
     while count > batch_size:
-        batch = cast(tuple[float, ...], _struct_unpack(in_stream, f"@{batch_size}f"))
+        batch = cast(tuple[float, ...], read_unpack(in_stream, f"@{batch_size}f"))
         yield from batch
         count -= batch_size
 
-    batch = cast(tuple[float, ...], _struct_unpack(in_stream, f"@{count}f"))
+    batch = cast(tuple[float, ...], read_unpack(in_stream, f"@{count}f"))
     yield from batch
 
 
@@ -340,14 +328,20 @@ def load(in_stream: BinaryIO, encoding: str = "utf-8", full_model: bool = True) 
         If False, skips loading the hidden output matrix.  This saves a fair bit
         of CPU time and RAM, but prevents training continuation.
     """
-    magic, version = cast(tuple[int, int], _struct_unpack(in_stream, "@2i"))
-    new_format = magic == _FASTTEXT_FILEFORMAT_MAGIC
+    (first_field,) = cast(tuple[int], read_unpack(in_stream, "@i"))
+    new_format = first_field == _FASTTEXT_FILEFORMAT_MAGIC
 
-    header_spec = _NEW_HEADER_FORMAT if new_format else _OLD_HEADER_FORMAT
-    model = {name: _struct_unpack(in_stream, fmt)[0] for (name, fmt) in header_spec}
-
-    if not new_format:
-        model.update(dim=magic, ws=version)
+    # Old format doesn't have magic and version, so we have to differentiate here
+    if new_format:
+        model = {
+            "magic": first_field,
+            "version": cast(tuple[int], read_unpack(in_stream, "@i")[0]),
+        }
+        model = {name: read_unpack(in_stream, fmt)[0] for (name, fmt) in _HEADER_FORMAT}
+    else:
+        model = {"dim": first_field, "ws": cast(tuple[int], read_unpack(in_stream, "@i")[0])}
+        # Skipping dim and version since we already read thme
+        model = {name: read_unpack(in_stream, fmt)[0] for (name, fmt) in _HEADER_FORMAT[2:]}
 
     raw_vocab, vocab_size, nwords, ntokens = _load_vocab(in_stream, new_format, encoding=encoding)
     model.update(raw_vocab=raw_vocab, vocab_size=vocab_size, nwords=nwords, ntokens=ntokens)
@@ -593,13 +587,13 @@ def save(model, out_stream, fb_fasttext_parameters, encoding):
 
 # It would have been amazing if FastText had provided this somewhere but :))
 
-# File format:
-# - Prelude:
+# (New) File format:
+# - Prelude:  # Absent in old format
 #   - 32b: int32 magic
 #   - 32b: int32 version
-# - Header (new format):
-#   - 32b: int32 dim  # Absent in old format
-#   - 32b: int32 ws  # Absent in old format
+# - Header:
+#   - 32b: int32 dim
+#   - 32b: int32 ws
 #   - 32b: int32 epoch
 #   - 32b: int32 min_count
 #   - 32b: int32 neg
@@ -626,7 +620,7 @@ def save(model, out_stream, fb_fasttext_parameters, encoding):
 #         - 8b: 0x00  # _END_OF_WORD_MARKER
 #       - 64b: int64 count
 #       - 8b: int8 entry_type  # 0x00 (_DICT_WORD_ENTRY_TYPE_MARKER) for words
-#    - Pruned Index:
+#    - Pruned Index:  # Absent in old format
 #      - prunedidx_size*
 #        - 32b: int32 ?
 #        - 32b: int32 ?
