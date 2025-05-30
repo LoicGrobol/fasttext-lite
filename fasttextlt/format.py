@@ -14,12 +14,9 @@ See Also
 
 # NOTE: see end of file for a description of the binary format
 
-import bz2
 import collections
-import gzip
 import io
 import logging
-import lzma
 import struct
 from typing import Any, BinaryIO, Literal, NamedTuple, cast
 
@@ -77,18 +74,6 @@ else:
 
 _INT_SIZE = struct.calcsize("@i")
 _BOOL_SIZE = struct.calcsize("@?")
-
-_FIELD_NAMES = sorted(
-    set([
-        *(name for name, _ in _HEADER_FORMAT),
-        "raw_vocab",
-        "vocab_size",
-        "nwords",
-        "vectors_ngrams",
-        "hidden_output",
-        "ntokens",
-    ])
-)
 
 
 # FIXME: make this a dataclass instead?
@@ -230,12 +215,17 @@ def _load_vocab(
         # TODO: why are we skipping these
         # for _ in range(pruneidx_size):
         #     read_unpack(in_stream, "@2i")
+    else:
+        if pruneidx_size != -1:
+            raise ValueError(f"Invalid pruneidx_size: {pruneidx_size}")
 
     return raw_vocab, vocab_size, nwords, ntokens
 
 
 def _load_matrix(
-    in_stream: BinaryIO, new_format: bool = True
+    in_stream: BinaryIO,
+    new_format: bool = True,
+    safe_load: bool = False,
 ) -> np.ndarray[tuple[int, int], np.dtype[np.floating]]:
     """Load a matrix from fastText native format.
 
@@ -243,19 +233,11 @@ def _load_matrix(
 
     Parameters
     ----------
-    in_stream : file
-        A file handle opened for reading.
-    new_format : bool, optional
-        True if the quant_input variable precedes
-        the matrix declaration.  Should be True for newer versions of fastText.
-
-    Returns
-    -------
-    :class:`np.array`
-        The vectors as an array.
-        Each vector will be a row in the array.
-        The number of columns of the array will correspond to the vector size.
-
+    - `in_stream`: A file handle opened for reading.
+    - `new_format`: True if the quant_input variable precedes the matrix declaration, which should
+      be the case for newer versions of fastText.
+    - `safe_load`: if `False`, loading will use `np.fromfile`, set to `True` if `in_stream` is
+      incompatible with that.
     """
     if new_format:
         in_stream.seek(_BOOL_SIZE, 1)
@@ -264,18 +246,9 @@ def _load_matrix(
     num_vectors, dim = cast(tuple[int, int], read_unpack(in_stream, "@2q"))
     count = num_vectors * dim
 
-    # numpy.fromfile doesn't play well with gzip.GzipFile as input:
-    #
-    # - https://github.com/RaRe-Technologies/gensim/pull/2476
-    # - https://github.com/numpy/numpy/issues/13470
-    #
-    # Until they fix it, we have to apply a workaround.  We only apply the
-    # workaround when it's necessary, because np.fromfile is heavily optimized
-    # and very efficient (when it works).
-
-    if isinstance(in_stream, (gzip.GzipFile, bz2.BZ2File, lzma.LZMAFile)):
+    if safe_load:
         logger.warning(
-            "Loading model from a compressed file. This can be slow."
+            "Using a safe loading routine. This can be slow."
             " This is a work-around for a bug in NumPy: <https://github.com/numpy/numpy/issues/13470>."
             " Consider decompressing your model file for a faster load. "
         )
@@ -292,18 +265,27 @@ def _load_matrix(
     )
 
 
-def load(in_stream: BinaryIO, encoding: str = "utf-8", full_model: bool = False) -> Model:
+def load(
+    in_stream: BinaryIO, encoding: str = "utf-8", full_model: bool = False, safe_load: bool = False
+) -> Model:
     """Load a model from a binary stream.
+
+    Reverse-engineered from
+    [FastText](https://github.com/facebookresearch/fastText/blob/1142dc4c4ecbc19cc16eee5cdd28472e689267e6/src/dictionary.cc#L500)
+    and Gensim.
 
     Parameters
     ----------
-    in_stream : file
+    - `in_stream` : file
         The readable binary stream.
-    encoding : str, optional
+    - `encoding` : str, optional
         The encoding to use for decoding text
-    full_model : boolean, optional
-        If False, skips loading the hidden output matrix.  This saves a fair bit
-        of CPU time and RAM, but prevents training continuation.
+    - `full_model` : boolean, optional
+        If False, skips loading the hidden output matrix.  This saves a fair bit of CPU time and
+        RAM, but prevents training continuation.
+    - `safe_load`: use a slightly slower array reading routine in place of `np.fromfile`. You need
+      to set this to `True` if `in_stream` is something lie `gzip.GzipFile` that's incompatible with
+      `np.fromfile`. See [the corresponding NumPy issue](https://github.com/numpy/numpy/issues/13470>.
     """
     (first_field,) = cast(tuple[int], read_unpack(in_stream, "@i"))
     new_format = first_field == _FASTTEXT_FILEFORMAT_MAGIC
@@ -328,10 +310,10 @@ def load(in_stream: BinaryIO, encoding: str = "utf-8", full_model: bool = False)
         "ntokens": ntokens,
     })
 
-    model["vectors_ngrams"] = _load_matrix(in_stream, new_format=new_format)
+    model["vectors_ngrams"] = _load_matrix(in_stream, new_format=new_format, safe_load=safe_load)
 
     if full_model:
-        model["hidden_output"] = _load_matrix(in_stream, new_format=new_format)
+        model["hidden_output"] = _load_matrix(in_stream, new_format=new_format, safe_load=safe_load)
         if in_stream.read() != b"":
             raise ValueError("expected to reach EOF")
     else:
@@ -356,29 +338,6 @@ def _sign_model(out_stream: BinaryIO):
     out_stream.write(_FASTTEXT_VERSION.tobytes())
 
 
-def _conv_field_to_bytes(field_value: Any, field_type: Literal["i", "d"]) -> bytes:
-    """
-    Auxiliary function that converts `field_value` to bytes based on request `field_type`,
-    for saving to the binary file.
-
-    Parameters
-    ----------
-    field_value: numerical
-        contains arguments of the string and start/end indexes of the bad portion.
-
-    field_type: str
-        currently supported `field_types` are `i` for 32-bit integer and `d` for 64-bit float
-    """
-    if field_type == "i":
-        return np.int32(field_value).tobytes()
-    elif field_type == "d":
-        return np.float64(field_value).tobytes()
-    else:
-        raise NotImplementedError(
-            f'Currently conversion to "{field_type}" type is not implemented.'
-        )
-
-
 def _args_save(out_stream: BinaryIO, model: Model):
     """
     Saves header with `model` parameters to the binary stream `out_stream` containing a model in the
@@ -395,7 +354,7 @@ def _args_save(out_stream: BinaryIO, model: Model):
         saved model
     """
     for field, field_type in _HEADER_FORMAT:
-        out_stream.write(_conv_field_to_bytes(getattr(Model, field), field_type))
+        out_stream.write(struct.pack(f"@{field_type}", getattr(model, field)))
 
 
 def _dict_save(out_stream: BinaryIO, model: Model, encoding: str = "utf-8"):
@@ -422,128 +381,56 @@ def _dict_save(out_stream: BinaryIO, model: Model, encoding: str = "utf-8"):
     # In the unsupervised case we have only words (no labels). Hence both fields
     # are equal.
 
-    out_stream.write(np.int32(model.nwords).tobytes())
-
-    out_stream.write(np.int32(model.nwords).tobytes())
+    out_stream.write(struct.pack("@i", model.nwords))
+    out_stream.write(struct.pack("@i", model.nwords))
 
     # nlabels=0 <- no labels  we are in unsupervised mode
-    out_stream.write(np.int32(0).tobytes())
+    out_stream.write(struct.pack("@i", 0))
 
-    out_stream.write(np.int64(model.corpus_total_words).tobytes())
+    # Number of training steps
+    out_stream.write(struct.pack("@q", model.ntokens))
 
-    # prunedidx_size_=-1, -1 value denotes no prunning index (prunning is only supported in supervised mode)
-    out_stream.write(np.int64(-1))
+    # no prune_idx in unsupervised mode. Use -1 as a flag.
+    # (why not 0, why not use unsigned long long who knows)
+    out_stream.write(struct.pack("@q", -1))
 
-    for word in model.wv.index_to_key:
-        word_count = model.wv.get_vecattr(word, "count")
+    for word, count in model.raw_vocab.items():
         out_stream.write(word.encode(encoding))
         out_stream.write(_END_OF_WORD_MARKER)
-        out_stream.write(np.int64(word_count).tobytes())
+        out_stream.write(struct.pack("@q", count))
         out_stream.write(_DICT_WORD_ENTRY_TYPE_MARKER)
 
-    # We are in unsupervised case, therefore pruned_idx is empty, so we do not need to write anything else
+    # We are in unsupervised case, therefore prune_idx is empty, so we do not need to write
+    # anything else
 
 
-def _input_save(out_stream, model):
+def _save_array(
+    array: np.ndarray[tuple[int, ...], np.dtype[np.floating]],
+    out_stream: BinaryIO,
+    quantized: bool | None = False,
+):
+    """Save a numpy array to `out_stream` in FastText format.
+
+    - If `quantized` is not `None`, a corresponding bit will be prepended.
+    - The array shape are simple packed together before the data (as C long longs).
     """
-    Saves word and ngram vectors from `model` to the binary stream `out_stream` containing a model in
-    the Facebook's native fastText `.bin` format.
+    if quantized is not None:  # New format
+        out_stream.write(struct.pack("@?", quantized))
 
-    Corresponding C++ fastText code:
-    [DenseMatrix::save](https://github.com/facebookresearch/fastText/blob/master/src/densematrix.cc)
-
-    Parameters
-    ----------
-    out_stream: writeable binary stream
-        stream to which the vectors are saved
-    model: gensim.models.fasttext.FastText
-        the model that contains the vectors to save
-    """
-    vocab_n, vocab_dim = model.wv.vectors_vocab.shape
-    ngrams_n, ngrams_dim = model.wv.vectors_ngrams.shape
-
-    assert vocab_dim == ngrams_dim
-    assert vocab_n == len(model.wv)
-    assert ngrams_n == model.wv.bucket
-
-    out_stream.write(struct.pack("@2q", vocab_n + ngrams_n, vocab_dim))
-    out_stream.write(model.wv.vectors_vocab.tobytes())
-    out_stream.write(model.wv.vectors_ngrams.tobytes())
+    out_stream.write(struct.pack(f"@{len(array.shape)}q", *array.shape))
+    out_stream.write(array.tobytes())
 
 
-# def _output_save(out_stream: BinaryIO, model: Model):
-#     """
-#     Saves output layer of `model` to the binary stream `out_stream` containing a model in
-#     the Facebook's native fastText `.bin` format.
-
-#     Corresponding C++ fastText code:
-#     [DenseMatrix::save](https://github.com/facebookresearch/fastText/blob/master/src/densematrix.cc)
-
-#     Parameters
-#     ----------
-#     out_stream: writeable binary stream
-#         the model that contains the output layer to save
-#     model: gensim.models.fasttext.FastText
-#         saved model
-#     """
-#     if model.hs:
-#         hidden_output = model.syn1
-#     if model.negative:
-#         hidden_output = model.syn1neg
-
-#     hidden_n, hidden_dim = hidden_output.shape
-#     out_stream.write(struct.pack("@2q", hidden_n, hidden_dim))
-#     out_stream.write(hidden_output.tobytes())
-
-
-# FIXME: doesn't work yet
-def _save_to_stream(model, out_stream, fb_fasttext_parameters, encoding):
-    """
-    Saves word embeddings to binary stream `out_stream` using the Facebook's native fasttext `.bin` format.
-
-    Parameters
-    ----------
-    out_stream: file name or writeable binary stream
-        stream to which the word embeddings are saved
-    model: gensim.models.fasttext.FastText
-        the model that contains the word embeddings to save
-    fb_fasttext_parameters: dictionary
-        dictionary contain parameters containing `lr_update_rate`, `word_ngrams`
-        unused by gensim implementation, so they have to be provided externally
-    encoding: str
-        encoding used in the output file
-    """
-
-    _sign_model(out_stream)
-    _args_save(out_stream, model, fb_fasttext_parameters)
-    _dict_save(out_stream, model, encoding)
-    out_stream.write(
-        struct.pack("@?", False)
-    )  # Save 'quant_', which is False for unsupervised models
-
-    # Save words and ngrams vectors
-    _input_save(out_stream, model)
-    out_stream.write(
-        struct.pack("@?", False)
-    )  # Save 'quot_', which is False for unsupervised models
-
-    # Save output layers of the model
-    # _output_save(out_stream, model)
-
-
-def save(model, out_stream, fb_fasttext_parameters, encoding):
+def save(model: Model, out_stream: BinaryIO, encoding: str = "utf-8"):
     """
     Saves word embeddings to the Facebook's native fasttext `.bin` format.
 
     Parameters
     ----------
-    out_stream: file name or writeable binary stream
+    out_stream: writeable binary stream
         stream to which model is saved
-    model: gensim.models.fasttext.FastText
+    model: Model
         saved model
-    fb_fasttext_parameters: dictionary
-        dictionary contain parameters containing `lr_update_rate`, `word_ngrams`
-        unused by gensim implementation, so they have to be provided externally
     encoding: str
         encoding used in the output file
 
@@ -552,18 +439,25 @@ def save(model, out_stream, fb_fasttext_parameters, encoding):
     Unfortunately, there is no documentation of the Facebook's native fasttext `.bin` format
 
     This is just reimplementation of
-    [FastText::saveModel](https://github.com/facebookresearch/fastText/blob/master/src/fasttext.cc)
-
-    Based on v0.9.1, more precisely commit da2745fcccb848c7a225a7d558218ee4c64d5333
+    [FastText::saveModel](https://github.com/facebookresearch/fastText/blob/da2745fcccb848c7a225a7d558218ee4c64d5333/src/fasttext.cc)
 
     Code follows the original C++ code naming.
     """
+    _sign_model(out_stream)
+    _args_save(out_stream, model)
+    _dict_save(out_stream, model, encoding)
 
-    if isinstance(out_stream, str):
-        with open(out_stream, "wb") as out_stream_stream:
-            _save_to_stream(model, out_stream_stream, fb_fasttext_parameters, encoding)
-    else:
-        _save_to_stream(model, out_stream, fb_fasttext_parameters, encoding)
+    # Save words and ngrams vectors
+    if model.vectors_ngrams.shape != (model.nwords + model.bucket, model.dim):
+        raise ValueError(
+            f"Corrupted model: the input matrix has shape {model.vectors_ngrams.shape}"
+            f" but the metadata says {(model.nwords + model.bucket, model.dim)}."
+        )
+    _save_array(model.vectors_ngrams, out_stream, quantized=False)
+
+    if model.hidden_output is not None:
+        # TODO: also check shape for this guy
+        _save_array(model.hidden_output, out_stream, quantized=False)
 
 
 # It would have been amazing if FastText had provided this somewhere but :))
@@ -588,11 +482,11 @@ def save(model, out_stream, fb_fasttext_parameters, encoding):
 #   - 64b: float64 t
 # - Vocab:
 #   - Prelude:  # vocab_size == nwords + nlabels?
+#     - 64b: int64 pruneidx_size  # Absent in old format
 #     - 32b: int32 vocab_size
 #     - 32b: int32 nwords
 #     - 32b: int32 nlabels  # 0 for unsupervised models
-#     - 64b: int64 ntokens
-#     - 64b: int64 pruneidx_size  # Absent in old format
+#     - 64b: int64 ntokens  # number of training steps
 #   - Content:
 #     - vocab_size*
 #       - Word:  # 0x00-terminated string
@@ -602,9 +496,9 @@ def save(model, out_stream, fb_fasttext_parameters, encoding):
 #       - 64b: int64 count
 #       - 8b: int8 entry_type  # 0x00 (_DICT_WORD_ENTRY_TYPE_MARKER) for words
 #    - Pruned Index:  # Absent in old format
-#      - prunedidx_size*
-#        - 32b: int32 ?
-#        - 32b: int32 ?
+#      - pruneidx_size*
+#        - 32b: int32 first
+#        - 32b: int32 second
 # - Input Vectors:  # aka vectors_ngrams
 #   - 1b: bool quant_input  # absent in old format
 #   - 64b: int64 num_vectors
