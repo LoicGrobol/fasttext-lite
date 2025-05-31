@@ -1,5 +1,5 @@
 # Original:
-# Authors: Michael Penkov <m=penkov.dev>
+# Authors: Michael Penkov <m@penkov.dev>
 # Copyright (C) 2019 RaRe Technologies s.r.o.
 # Licensed under the GNU LGPL v2.1
 
@@ -37,8 +37,8 @@ logger = logging.getLogger(__name__)
 # Constants for FastText version and FastText file format magic (both int32)
 # https://github.com/facebookresearch/fastText/blob/master/src/fasttext.cc#L25
 
-_FASTTEXT_VERSION = np.int32(12)
-_FASTTEXT_FILEFORMAT_MAGIC = np.int32(793712314)
+_FASTTEXT_FILEFORMAT_MAGIC = b"\xba\x16\x4f\x2f"  # 793712314 as int32
+_FASTTEXT_VERSION = 12
 
 
 # NOTE: everywhere in this file, we assume we are try to load a model saved on a little-endian
@@ -65,6 +65,7 @@ _FLOAT_SIZE = struct.calcsize("<f")
 
 # FIXME: make this a dataclass instead?
 class Model(NamedTuple):
+    # TODO: sort docstring
     """Holds data loaded from the Facebook binary.
 
     Parameters
@@ -112,21 +113,21 @@ class Model(NamedTuple):
     dim: int
     ws: int
     epoch: int
+    min_count: int
     neg: int
+    word_ngrams: int
     loss: int
     model: int
     bucket: int
-    min_count: int
-    t: float
     minn: int
     maxn: int
+    lr_update_rate: int
+    t: float
     raw_vocab: collections.OrderedDict
     nwords: int
     vocab_size: int
     vectors_ngrams: np.ndarray[tuple[int, int], np.dtype[np.floating]]
     hidden_output: np.ndarray[tuple[int, int], np.dtype[np.floating]]
-    word_ngrams: int
-    lr_update_rate: int
     ntokens: int
 
 
@@ -231,6 +232,7 @@ def _load_matrix(
     num_vectors, dim = cast(tuple[int, int], read_unpack(in_stream, "<2q"))
     count = num_vectors * dim
 
+    # TODO: check that the sizes/endianness are ok here. What does np enforce?
     if safe_load:
         logger.warning(
             "Using a safe loading routine. This can be slow."
@@ -274,21 +276,26 @@ def load(
       to set this to `True` if `in_stream` is something lie `gzip.GzipFile` that's incompatible with
       `np.fromfile`. See [the corresponding NumPy issue](https://github.com/numpy/numpy/issues/13470>.
     """
-    (first_field,) = cast(tuple[int], read_unpack(in_stream, "<i"))
+    # TODO: could read without decoding tbh
+    first_field = in_stream.read(_INT_SIZE)
     new_format = first_field == _FASTTEXT_FILEFORMAT_MAGIC
 
     # Old format doesn't have magic and version, so we have to differentiate here
     if new_format:
+        # FIXME: actually Model doesn't use this, dump them?
         model = {
             "magic": first_field,
             "version": cast(tuple[int], read_unpack(in_stream, "<i")[0]),
         }
+        # TODO: warn on wrong version?
         # TODO: make this faster by reading all fields at once
         model = {name: read_unpack(in_stream, fmt)[0] for (name, fmt) in _HEADER_FORMAT}
     else:
-        model = {"dim": first_field, "ws": cast(tuple[int], read_unpack(in_stream, "<i")[0])}
+        model = {
+            "dim": int.from_bytes(first_field, byteorder="little", signed=True),
+        }
         # Skipping dim and version since we already read thme
-        model = {name: read_unpack(in_stream, fmt)[0] for (name, fmt) in _HEADER_FORMAT[2:]}
+        model = {name: read_unpack(in_stream, fmt)[0] for (name, fmt) in _HEADER_FORMAT[1:]}
 
     raw_vocab, vocab_size, nwords, ntokens = _load_vocab(in_stream, new_format, encoding=encoding)
     model.update({
@@ -322,8 +329,8 @@ def _sign_model(out_stream: BinaryIO):
     ----------
     out_stream: writeable binary stream
     """
-    out_stream.write(_FASTTEXT_FILEFORMAT_MAGIC.tobytes())
-    out_stream.write(_FASTTEXT_VERSION.tobytes())
+    out_stream.write(_FASTTEXT_FILEFORMAT_MAGIC)
+    out_stream.write(struct.pack("<i", _FASTTEXT_VERSION))
 
 
 def _args_save(out_stream: BinaryIO, model: Model):
@@ -463,22 +470,22 @@ def save(model: Model, out_stream: BinaryIO, encoding: str = "utf-8"):
 
 # (New) File format:
 # - Prelude:  # Absent in old format
-#   - 32b: int32 magic
-#   - 32b: int32 version
+#   - 32b: int32 magic  # _FASTTEXT_FILEFORMAT_MAGIC = np.int32(793712314)
+#   - 32b: int32 version  # _FASTTEXT_VERSION = np.int32(12)
 # - Header:
-#   - 32b: int32 dim
-#   - 32b: int32 ws
-#   - 32b: int32 epoch
-#   - 32b: int32 min_count
-#   - 32b: int32 neg
+#   - 32b: int32 dim  # The dimensionality of the vectors.
+#   - 32b: int32 ws  # The window size.
+#   - 32b: int32 epoch  # The number of training epochs.
+#   - 32b: int32 min_count  # The threshold below which the model ignores terms.
+#   - 32b: int32 neg  # If non-zero, indicates that the model uses negative sampling.
 #   - 32b: int32 word_ngram
-#   - 32b: int32 loss
-#   - 32b: int32 model
-#   - 32b: int32 bucket
-#   - 32b: int32 minn
-#   - 32b: int32 maxn
+#   - 32b: int32 loss  # If equal to 1, indicates that the model uses hierarchical sampling.
+#   - 32b: int32 model  # If equal to 2, indicates that the model uses skip-grams.
+#   - 32b: int32 bucket  # The number of buckets.
+#   - 32b: int32 minn  # The minimum ngram length.
+#   - 32b: int32 maxn  # The maximum ngram length.
 #   - 32b: int32 lr_update_rate
-#   - 64b: float64 t
+#   - 64b: float64 t  # # The sample threshold.
 # - Vocab:
 #   - Prelude:
 #     - 64b: int64 pruneidx_size  # -1 stands for None. Absent in old format
@@ -497,7 +504,7 @@ def save(model: Model, out_stream: BinaryIO, encoding: str = "utf-8"):
 #     - nlabels*
 #       - Label:  # 0x00-terminated string
 #         - *
-#           - 8b: char c
+#           - 8b: char c  # Most likely a utf-8 byte
 #         - 8b: 0x00
 #       - 64b: int64 count
 #       - 8b: int8 entry_type  # 0x01 for labels
