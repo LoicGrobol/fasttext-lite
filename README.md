@@ -6,12 +6,17 @@ version](https://img.shields.io/pypi/v/fasttextlt.svg)](https://pypi.org/project
 [![Build
 status](https://github.com/LoicGrobol/fasttextlt/actions/workflows/ci.yml/badge.svg)](https://github.com/LoicGrobol/fasttext-lite/actions/workflows/ci.yml)
 
-A pure[^1] Python FastText model reader, to ensure that FastText model stay usable for as long as
+A pure[^1] Python FastText interface, to ensure that FastText model stay usable for as long as
 possible.
 
-**This is slower than the original FastText**, for some methods by orders of magnitude. It's the
+- **This is slower than the original FastText**, for some methods by orders of magnitude. It's the
 price to pay for not using Cython or compiled code. These methods are also not usually bottlenecks
 in standard uses of FastText.
+- **Support for training is not planned**, if you want to train new models, I would advise starting
+a new library from scratch to avoid being stuck in FastText's historical cruft, and take inspiration
+from [Floret](https://github.com/explosion/floret) instead. You can save models using FastText lite,
+but you'll have to change the weights etc manually.
+
 
 FastText has been in maintenance mode for some time, with no indication that it will ever change. In
 the absence of further releases, it will stay stuck in increasingly obsolete Python versions and get
@@ -22,9 +27,6 @@ using FastText models for longer and at low cost, by extracting the relevant pa
 converting the Cython parts back to pure Python (and optimising them as well as I can). So far it
 supports loading the binary models and use them for word embedding purposes.
 
-If you want to train new models, I would advise starting a new library from scratch to avoid being
-stuck in FastText's historical cruft, and take inspiration from
-[Floret](https://github.com/explosion/floret) instead.
 
 [^1]: The only non-pure Python dependency is NumPy 2, which can reasonably be expected to be
     available.
