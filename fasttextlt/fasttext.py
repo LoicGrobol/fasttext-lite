@@ -1,8 +1,9 @@
 import bz2
 import gzip
+import json
 import lzma
 import pathlib
-from typing import BinaryIO, Self, cast
+from typing import BinaryIO, Self, Sequence, cast
 import numpy as np
 
 from fasttextlt.format import load, Model, save
@@ -111,7 +112,7 @@ def ft_ngram_hashes(
     ----------
     - `min_n`: Minimum ngram length
     - `max_n`: Maximum ngram length
-    - `num_buckets`: The number of buckets
+    - `num_buckets`: Number of target buckets. A hash $`h`$ verifies $0 ⩽ `h` < `num_buckets`$.
     """
     encodings = [c.encode("utf-8") for c in f"<{word}>"]
     n_chars = len(encodings)
@@ -122,6 +123,8 @@ def ft_ngram_hashes(
     if min_n == 1:
         num_ngrams -= 2
 
+    # This would be more intuitive but a bit more expensive as an (possibly anti-)triangular matrix.
+    # The outer loop is embarrasingly parallel. It's unlikely to be the worst bottleneck.
     res = np.empty(num_ngrams, np.intp)
     idx = 0
     # Only `n_chars-1` to skip `>`
@@ -143,35 +146,105 @@ def ft_ngram_hashes(
     return res
 
 
-# TODO: repr, str
-class FastText:
-    def __init__(self, model: Model):
-        self.model = model
-        self._words: list[str] = list(self.model.raw_vocab.keys())
-        self._word_ids: dict[str, int] = {w: i for i, w in enumerate(self._words)}
+class FastTextVocab:
+    """Holds a FastText vocabulary for digitization consisting of words, optionally labels and all
+    possible n-grams of UTF-8 characters in a length range. Words and labels indices are kept in a
+    dictionary, n-grams indices are computed on-the-fly using a variant of the [32 bits FNV-1a hash
+    function][1].
 
-    @property
-    def embedding_matrix(self) -> np.ndarray[tuple[int, int], np.dtype[np.floating]]:
-        return cast(np.ndarray[tuple[int, int], np.dtype[np.floating]], self.model.vectors_ngrams)
+    [1]: en.wikipedia.org/wiki/Fowler–Noll–Vo_hash_function"""
 
-    def get_word_id(self, word: str) -> int:
-        return self._word_ids[word]
+    def __init__(
+        self,
+        words: Sequence[str],
+        labels: Sequence[str],
+        min_ngram_length: int,
+        max_ngram_length,
+        n_ngram_buckets: int,
+    ):
+        self.words = list(words)
+        self.labels = list(labels)
+        self.word_ids: dict[str, int] = {w: i for i, w in enumerate(self.words)}
+        self.label_ids: dict[str, int] = {w: i for i, w in enumerate(self.labels)}
+        self._n_words = len(words)
+        self.min_ngram_length = min_ngram_length
+        self.max_ngram_length = max_ngram_length
+        self.n_ngram_buckets = n_ngram_buckets
 
-    # We could lru cache this. Maybe.
+    # If you want to make this run faster, Zipf law says that `cachetools.LFUCache` of size a couple
+    # hundred words should help.
     def get_subword_ids(self, word: str) -> np.ndarray[tuple[int], np.dtype[np.intp]]:
         subword_ids = (
             ft_ngram_hashes(
-                word, min_n=self.model.minn, max_n=self.model.maxn, num_buckets=self.model.bucket
+                word,
+                min_n=self.min_ngram_length,
+                max_n=self.max_ngram_length,
+                num_buckets=self.n_ngram_buckets,
             )
-            + self.model.nwords
+            + self._n_words
         )
-        if (word_id := self._word_ids.get(word)) is not None:
+        # We could pre-allocate blablabla
+        if (word_id := self.word_ids.get(word)) is not None:
             return cast(
                 np.ndarray[tuple[int], np.dtype[np.intp]],
                 np.concatenate([np.array([word_id], np.intp), subword_ids]),
             )
         else:
             return subword_ids
+
+    def get_word_id(self, word: str) -> int:
+        return self.word_ids[word]
+
+    def save(self, path: str | pathlib.Path):
+        with open(path, "w") as out_stream:
+            json.dump(
+                {
+                    "words": self.words,
+                    "labels": self.labels,
+                    "min_ngram_length": self.min_ngram_length,
+                    "max_ngram_length": self.max_ngram_length,
+                    "n_ngram_buckets": self.n_ngram_buckets,
+                },
+                out_stream,
+                ensure_ascii=False,
+            )
+
+    @classmethod
+    def load(cls, path: str | pathlib.Path) -> Self:
+        with open(path) as in_stream:
+            d = json.load(in_stream)
+        return cls(**d)
+
+    @classmethod
+    def from_model(cls, model: Model) -> Self:
+        vocabulary: list[str] = list(model.raw_vocab.keys())
+        words = vocabulary[: model.nwords]
+        labels = vocabulary[model.nwords :]
+        return cls(
+            words=words,
+            labels=labels,
+            min_ngram_length=model.minn,
+            max_ngram_length=model.maxn,
+            n_ngram_buckets=model.bucket,
+        )
+
+
+# TODO: repr, str
+class FastText:
+    def __init__(self, model: Model):
+        self.model = model
+        self.vocabulary = FastTextVocab.from_model(self.model)
+
+    @property
+    def embedding_matrix(self) -> np.ndarray[tuple[int, int], np.dtype[np.floating]]:
+        return cast(np.ndarray[tuple[int, int], np.dtype[np.floating]], self.model.vectors_ngrams)
+
+    def get_word_id(self, word: str) -> int:
+        return self.vocabulary.get_word_id(word)
+
+    # We could lru cache this. Maybe.
+    def get_subword_ids(self, word: str) -> np.ndarray[tuple[int], np.dtype[np.intp]]:
+        return self.vocabulary.get_subword_ids(word)
 
     def save_model(self, path: str | pathlib.Path):
         with open(path, "wb") as out_stream:

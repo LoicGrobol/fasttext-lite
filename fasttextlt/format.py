@@ -49,13 +49,13 @@ _HEADER_FORMAT: list[tuple[str, Literal["<i", "<d"]]] = [
     ("epoch", "<i"),
     ("min_count", "<i"),
     ("neg", "<i"),
-    ("word_ngrams", "<i"),  # Unused in gensim
+    ("word_ngrams", "<i"),
     ("loss", "<i"),
     ("model", "<i"),
     ("bucket", "<i"),
     ("minn", "<i"),
     ("maxn", "<i"),
-    ("lr_update_rate", "<i"),  # Unused in gensim
+    ("lr_update_rate", "<i"),
     ("t", "<d"),
 ]
 
@@ -270,13 +270,13 @@ def load(
     - `encoding` : str, optional
         The encoding to use for decoding text
     - `full_model` : boolean, optional
-        If False, skips loading the hidden output matrix.  This saves a fair bit of CPU time and
-        RAM, but prevents training continuation.
+        If False, skips loading the hidden output matrix. This saves a fair bit of CPU time and RAM,
+        but prevents training continuation.
     - `safe_load`: use a slightly slower array reading routine in place of `np.fromfile`. You need
       to set this to `True` if `in_stream` is something lie `gzip.GzipFile` that's incompatible with
-      `np.fromfile`. See [the corresponding NumPy issue](https://github.com/numpy/numpy/issues/13470>.
+      `np.fromfile`. See [the corresponding NumPy
+      issue](https://github.com/numpy/numpy/issues/13470>.
     """
-    # TODO: could read without decoding tbh
     first_field = in_stream.read(_INT_SIZE)
     new_format = first_field == _FASTTEXT_FILEFORMAT_MAGIC
 
@@ -406,7 +406,7 @@ def _save_array(
 ):
     """Save a numpy array to `out_stream` in FastText format.
 
-    - If `quantized` is not `None`, a corresponding bit will be prepended.
+    - If `quantized` is not `None`, a corresponding bool will be prepended.
     - The array shape are simple packed together before the data (as C long longs).
     """
     if quantized is not None:  # New format
@@ -517,9 +517,9 @@ def save(model: Model, out_stream: BinaryIO, encoding: str = "utf-8"):
 #   - 8b: bool quant_input  # absent in old format
 #   - 64b: int64 m   # == num_vectors
 #   - 64b: int64 n   # == dim
-#   - (m*n*float_size)b: float32 data  # numpy-compatible don't worry about it kitten
+#   - (m*n*float_size)b: float32* data  # numpy-compatible don't worry about it kitten
 # - Output Vectors:  # aka hidden_output
 #   - 8b: bool quant_input  # absent in old format
 #   - 64b: int64 m
 #   - 64b: int64 n
-#   - (m*n*float_size)b: float32 data
+#   - (m*n*float_size)b: float32* data

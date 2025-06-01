@@ -17,9 +17,12 @@ def test_data_dir() -> pathlib.Path:
     return pathlib.Path(__file__).parent / "fixtures"
 
 
+# TODO: figure out a way to run tests on big models as an option
+# TODO: figure out a ~nice~ way to test compressed models for parity
 @pytest.fixture(
     params=[
         "smol_model.bin",
+        # "smol_model.bin.gz",
         "smol_model_nochar.bin",
         # "cc.cy.300.bin",
     ],
@@ -37,3 +40,10 @@ def models(
     ftlt_model = fasttextlt.fasttext.FastText.load_model(model_path)
 
     return ftlt_model, ft_model
+
+
+@pytest.fixture(scope="session")
+def model(
+    model_path: pathlib.Path,
+) -> fasttextlt.fasttext.FastText:
+    return fasttextlt.fasttext.FastText.load_model(model_path)
