@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/) and this p
 
 ## [Unreleased]
 
+### Changed
+
+- Be more informative when trying to read obviously invalid files.
+
 ## [0.2.0] - 2025-06-01
 
 ### Added

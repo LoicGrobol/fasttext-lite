@@ -254,6 +254,7 @@ class FastText:
     # - TODO: support mmap? How to make sure it's closed then? With another function? by accepting a
     #   bytesio and letting the user get it from mmap?
     # - TODO: support zstd for 3.14?
+    # - TODO: document this and the semi-support for compression
     @classmethod
     def load_model(cls, path: str | pathlib.Path, full_model: bool = False) -> Self:
         """Load a FastText model from a file."""

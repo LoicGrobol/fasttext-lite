@@ -278,7 +278,23 @@ def load(
       issue](https://github.com/numpy/numpy/issues/13470>.
     """
     first_field = in_stream.read(_INT_SIZE)
-    new_format = first_field == _FASTTEXT_FILEFORMAT_MAGIC
+    if first_field == _FASTTEXT_FILEFORMAT_MAGIC:
+        new_format = True
+    elif first_field == b"\x2f\x4f\x16\xba":  # Reverse magic number
+        raise ValueError(
+            "It looks like you are trying to load a FastText model that was saved on a big endian"
+            " machine as its first bytes are 2F4F16BA. This is not supported."
+        )
+    elif struct.unpack("<i", first_field)[0] <= 0:
+        raise ValueError(
+            "It looks like the file you are trying to load is not a valid FastText model"
+            " as its first 4 bytes are not a little-endian positive int32. This could"
+            " mean that it's a pre FastText 0.2.0 model saved on a big endian machine,"
+            " or most likely that it's not a FastText model at all."
+        )
+    else:
+        new_format = False
+    # FIXME: actually don't we want to ditch old format entirely?
 
     # Old format doesn't have magic and version, so we have to differentiate here
     if new_format:
