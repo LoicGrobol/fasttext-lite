@@ -67,7 +67,9 @@ def ft_hash(stream: bytes) -> np.uint32:
     Formally, this is the [32 bits FNV-1a hash
     function](en.wikipedia.org/wiki/Fowler–Noll–Vo_hash_function), which used to be used for
     Python's standard `hash` :-)."""
-    res = FNV_1_32_OFFSET_BASIS
+    # This is going to change in-place so copy it. Since it's a scalar and not an arrray it will
+    # happen on first write anyway BUT let's be explicit.
+    res = FNV_1_32_OFFSET_BASIS.copy()
 
     # The loop is annoying, but no way out of it in pure Python, even with np trickery
     for b in np.frombuffer(stream, dtype=np.int8).astype(dtype=np.uint32, copy=False):
@@ -129,7 +131,8 @@ def ft_ngram_hashes(
     idx = 0
     # Only `n_chars-1` to skip `>`
     for i in range(n_chars - 1):
-        # This is going to change in-place so copy it
+        # This is going to change in-place so copy it. Since it's a scalar and not an arrray it will
+        # happen on first write anyway BUT let's be explicit.
         h = FNV_1_32_OFFSET_BASIS.copy()
         for j in range(i, min(n_chars, i + max_n)):
             # `frombuffer` is no-copy yay
