@@ -1,15 +1,9 @@
-# Original:
-# Authors: Michael Penkov <m@penkov.dev>
-# Copyright (C) 2019 RaRe Technologies s.r.o.
-# Licensed under the GNU LGPL v2.1
-
 """Load models from the native binary format released by Facebook.
 
 See Also
 --------
 
 `FB Implementation <https://github.com/facebookresearch/fastText/blob/master/src/matrix.cc>`_.
-
 """
 
 # NOTE: see end of file for a description of the binary format
@@ -482,12 +476,11 @@ def save(model: Model, out_stream: BinaryIO, encoding: str = "utf-8"):
 
     Notes
     -----
-    Unfortunately, there is no documentation of the Facebook's native fasttext `.bin` format
+    Unfortunately, there is no documentation of the Facebook's native fasttext `.bin` format (but
+    see the end of this here file for my best attempt).
 
-    This is just reimplementation of
-    [FastText::saveModel](https://github.com/facebookresearch/fastText/blob/da2745fcccb848c7a225a7d558218ee4c64d5333/src/fasttext.cc)
-
-    Code follows the original C++ code naming.
+    This is based on
+    [FastText::saveModel](https://github.com/facebookresearch/fastText/blob/da2745fcccb848c7a225a7d558218ee4c64d5333/src/fasttext.cc).
     """
     _sign_model(out_stream)
     _args_save(out_stream, model)

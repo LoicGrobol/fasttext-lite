@@ -1,16 +1,25 @@
-GNU Lesser General Public License
-=================================
+Licence
+========
 
-_Version 2.1, February 1999_  
-_Copyright © 1991, 1999 Free Software Foundation, Inc._  
-_51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA_
+Copyright 2025, Morgan Grobol <morgan.grobol@tuta.com>.
+
+This library started from [Michael Penkov's implementation of the FastText binary format for
+Gensim](https://github.com/piskvorky/gensim/commit/32604bcab05947f0a1b6ce95717ecfa83e6d449b) and
+while a lot has changed since then, can be considered a modification of it and therefore has to keep
+its original licencing under LGPL v2.1 (see below for the full text).
+
+## GNU Lesser General Public License
+
+*Version 2.1, February 1999*  
+*Copyright © 1991, 1999 Free Software Foundation, Inc.*  
+*51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA*
 
 Everyone is permitted to copy and distribute verbatim copies
 of this license document, but changing it is not allowed.
 
-_This is the first released version of the Lesser GPL.  It also counts
+*This is the first released version of the Lesser GPL.  It also counts
 as the successor of the GNU Library Public License, version 2, hence
-the version number 2.1._
+the version number 2.1.*
 
 ### Preamble
 
