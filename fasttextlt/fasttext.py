@@ -187,7 +187,9 @@ class FastTextVocab:
             + self._n_words
         )
         # We could pre-allocate blablabla
-        if (word_id := self.word_ids.get(word)) is not None:
+
+        # -1 marks pruned words
+        if (word_id := self.word_ids.get(word, -1)) != -1:
             return cast(
                 np.ndarray[tuple[int], np.dtype[np.intp]],
                 np.concatenate([np.array([word_id], np.intp), subword_ids]),
@@ -220,9 +222,8 @@ class FastTextVocab:
 
     @classmethod
     def from_model(cls, model: Model) -> Self:
-        vocabulary: list[str] = list(model.raw_vocab.keys())
-        words = vocabulary[: model.nwords]
-        labels = vocabulary[model.nwords :]
+        words = list(model.words.keys())
+        labels = list(model.labels.keys())
         return cls(
             words=words,
             labels=labels,

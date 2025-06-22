@@ -18,11 +18,14 @@ import collections
 import io
 import logging
 import struct
-from typing import Any, BinaryIO, Literal, NamedTuple, cast
+from typing import Any, BinaryIO, Literal, NamedTuple, TypedDict, cast
 
 import numpy as np
 
-_END_OF_WORD_MARKER = b"\x00"
+# 32 bits (4 bytes) little-endian: how the matrices are serialized in the binary format
+_MATRIX_BUFFER_DT = np.dtype("<f4")
+
+_END_OF_STRING_FLAG = b"\x00"
 
 # FastText dictionary data structure holds elements of type `entry` which can have `entry_type`
 # either `word` (0 :: int8) or `label` (1 :: int8). Here we deal with unsupervised case only
@@ -30,6 +33,7 @@ _END_OF_WORD_MARKER = b"\x00"
 # See https://github.com/facebookresearch/fastText/blob/master/src/dictionary.h
 
 _DICT_WORD_ENTRY_TYPE_MARKER = b"\x00"
+_DICT_LABEL_ENTRY_TYPE_MARKER = b"\x01"
 
 
 logger = logging.getLogger(__name__)
@@ -41,7 +45,7 @@ _FASTTEXT_FILEFORMAT_MAGIC = b"\xba\x16\x4f\x2f"  # 793712314 as int32
 _FASTTEXT_VERSION = 12
 
 
-# NOTE: everywhere in this file, we assume we are try to load a model saved on a little-endian
+# NOTE: everywhere in this file, we assume we are trying to load a model saved on a little-endian
 # platform
 _HEADER_FORMAT: list[tuple[str, Literal["<i", "<d"]]] = [
     ("dim", "<i"),
@@ -92,13 +96,15 @@ class Model(NamedTuple):
         The minimum ngram length.
     maxn : int
         The maximum ngram length.
-    raw_vocab : collections.OrderedDict
-        A map from words (str) to their frequency (int).  The order in the dict
-        corresponds to the order of the words in the Facebook binary.
-    nwords : int
-        The number of words.
     vocab_size : int
         The size of the vocabulary.
+    nwords : int
+        The number of words.
+    nlabels : int
+        The number of labels.
+    words : collections.OrderedDict
+        A map from words (str) to their frequency (int).  The order in the dict
+        corresponds to the order of the words in the binary.
     vectors_ngrams : np.ndarray
         This is a matrix that contains vectors learned by the model.
         Each row corresponds to a vector.
@@ -123,12 +129,15 @@ class Model(NamedTuple):
     maxn: int
     lr_update_rate: int
     t: float
-    raw_vocab: collections.OrderedDict
-    nwords: int
     vocab_size: int
+    nwords: int
+    nlabels: int
+    ntokens: int
+    pruneidx_size: int
+    words: collections.OrderedDict
+    labels: collections.OrderedDict
     vectors_ngrams: np.ndarray[tuple[int, int], np.dtype[np.floating]]
     hidden_output: np.ndarray[tuple[int, int], np.dtype[np.floating]]
-    ntokens: int
 
 
 def read_unpack(in_stream: BinaryIO, fmt: str) -> tuple[Any, ...]:
@@ -137,9 +146,38 @@ def read_unpack(in_stream: BinaryIO, fmt: str) -> tuple[Any, ...]:
     return struct.unpack(fmt, data)
 
 
-def _load_vocab(
-    in_stream: BinaryIO, new_format: bool, encoding: str = "utf-8"
-) -> tuple[collections.OrderedDict[str, int], int, int, int]:
+class Vocab(TypedDict):
+    vocab_size: int
+    nwords: int
+    nlabels: int
+    ntokens: int
+    pruneidx_size: int
+    words: collections.OrderedDict[str, int]
+    labels: collections.OrderedDict[str, int]
+
+
+def _read_vocab_item(in_stream: BinaryIO, encoding: str = "utf-8") -> tuple[str, int, bytes]:
+    buffer = io.BytesIO()
+
+    while (c := in_stream.read(1)) != _END_OF_STRING_FLAG:
+        buffer.write(c)
+
+    b = buffer.getvalue()
+    try:
+        item = b.decode(encoding)
+    except UnicodeDecodeError:
+        item = b.decode(encoding, errors="backslashreplace")
+        logger.error(
+            f"failed to decode invalid {encoding} bytes {b!r};"
+            f" replacing invalid characters, using {item!r}",
+        )
+    (count,) = cast(tuple[int], read_unpack(in_stream, "<q"))
+    flag = in_stream.read(1)
+
+    return item, count, flag
+
+
+def _load_vocab(in_stream: BinaryIO, new_format: bool, encoding: str = "utf-8") -> Vocab:
     """Load a vocabulary from a FB binary.
 
     Before the vocab is ready for use, call the prepare_vocab function and pass
@@ -162,40 +200,35 @@ def _load_vocab(
         The number of words.
         The number of tokens.
     """
-    vocab_size, nwords, nlabels = cast(tuple[int, int, int], read_unpack(in_stream, "<3i"))
-
     # Vocab stored by [Dictionary::save](https://github.com/facebookresearch/fastText/blob/master/src/dictionary.cc)
-    if nlabels > 0:
-        raise NotImplementedError("Supervised fastText models are not supported")
-    logger.info(f"loading {vocab_size} words for fastText model from {in_stream.name}")
-
-    (ntokens,) = cast(tuple[int], read_unpack(in_stream, "<q"))  # number of tokens
+    vocab_size, nwords, nlabels = cast(tuple[int, int, int], read_unpack(in_stream, "<3i"))
+    if vocab_size != nwords + nlabels:
+        raise ValueError(
+            f"Invalid model: vocab size ({vocab_size}) ≠ nwords ({nwords}) + nlabels ({nlabels})"
+        )
+    (ntokens,) = cast(tuple[int], read_unpack(in_stream, "<q"))
 
     if new_format:
         (pruneidx_size,) = cast(tuple[int], read_unpack(in_stream, "<q"))
     else:
-        pruneidx_size = 0
+        pruneidx_size = -1
 
-    raw_vocab = collections.OrderedDict()
-    for _ in range(vocab_size):
-        word_bytes = io.BytesIO()
-        char_byte = in_stream.read(1)
+    logger.info(f"loading {nwords} words for fastText model from {in_stream.name}")
 
-        while char_byte != _END_OF_WORD_MARKER:
-            word_bytes.write(char_byte)
-            char_byte = in_stream.read(1)
+    # TODO: make these objects? Would that be overkill or inappropriate?
+    words = collections.OrderedDict()
+    for _ in range(nwords):
+        word, count, flag = _read_vocab_item(in_stream, encoding)
+        if flag != _DICT_WORD_ENTRY_TYPE_MARKER:
+            raise ValueError(f"Corrupted vocabulary: word entry with flag {flag}")
+        words[word] = count
 
-        word_bytes = word_bytes.getvalue()
-        try:
-            word = word_bytes.decode(encoding)
-        except UnicodeDecodeError:
-            word = word_bytes.decode(encoding, errors="backslashreplace")
-            logger.error(
-                f"failed to decode invalid unicode bytes {word_bytes!r};"
-                f" replacing invalid characters, using {word!r}",
-            )
-        count, _ = cast(tuple[int, bytes], read_unpack(in_stream, "<qb"))
-        raw_vocab[word] = count
+    labels = collections.OrderedDict()
+    for _ in range(nlabels):
+        label, count, flag = _read_vocab_item(in_stream, encoding)
+        if flag != _DICT_LABEL_ENTRY_TYPE_MARKER:
+            raise ValueError(f"Corrupted vocabulary: label entry with flag {flag}")
+        labels[label] = count
 
     if pruneidx_size > 0:
         in_stream.seek(pruneidx_size * 2 * _INT_SIZE, 1)
@@ -206,7 +239,15 @@ def _load_vocab(
         if pruneidx_size != -1:
             raise ValueError(f"Invalid pruneidx_size: {pruneidx_size}")
 
-    return raw_vocab, vocab_size, nwords, ntokens
+    return {
+        "vocab_size": vocab_size,
+        "nwords": nwords,
+        "nlabels": nlabels,
+        "ntokens": ntokens,
+        "pruneidx_size": pruneidx_size,
+        "words": words,
+        "labels": labels,
+    }
 
 
 def _load_matrix(
@@ -232,23 +273,22 @@ def _load_matrix(
     num_vectors, dim = cast(tuple[int, int], read_unpack(in_stream, "<2q"))
     count = num_vectors * dim
 
-    # TODO: check that the sizes/endianness are ok here. What does np enforce?
     if safe_load:
         logger.warning(
             "Using a safe loading routine. This can be slow."
             " This is a work-around for a bug in NumPy: <https://github.com/numpy/numpy/issues/13470>."
             " Consider decompressing your model file for a faster load. "
         )
-        matrix = np.frombuffer(in_stream.read(count * _FLOAT_SIZE), dtype=np.float32)
+        matrix = np.frombuffer(in_stream.read(count * _FLOAT_SIZE), dtype=_MATRIX_BUFFER_DT)
     else:
-        matrix = np.fromfile(in_stream, np.float32, count)
+        matrix = np.fromfile(in_stream, dtype=_MATRIX_BUFFER_DT, count=count)
 
     if matrix.shape != (count,):
         raise ValueError(f"Wrong matrix size: expected `{(count,)}`,  got `{matrix.shape!r}`")
 
     return cast(
         np.ndarray[tuple[int, int], np.dtype[np.floating]],
-        matrix.reshape((num_vectors, dim), copy=False),
+        matrix.reshape((num_vectors, dim), order="C", copy=False),
     )
 
 
@@ -313,13 +353,8 @@ def load(
         # Skipping dim and version since we already read thme
         model = {name: read_unpack(in_stream, fmt)[0] for (name, fmt) in _HEADER_FORMAT[1:]}
 
-    raw_vocab, vocab_size, nwords, ntokens = _load_vocab(in_stream, new_format, encoding=encoding)
-    model.update({
-        "raw_vocab": raw_vocab,
-        "vocab_size": vocab_size,
-        "nwords": nwords,
-        "ntokens": ntokens,
-    })
+    vocab = _load_vocab(in_stream, new_format, encoding=encoding)
+    model.update(vocab)
 
     model["vectors_ngrams"] = _load_matrix(in_stream, new_format=new_format, safe_load=safe_load)
 
@@ -392,27 +427,27 @@ def _dict_save(out_stream: BinaryIO, model: Model, encoding: str = "utf-8"):
     # In the unsupervised case we have only words (no labels). Hence both fields
     # are equal.
 
+    out_stream.write(struct.pack("<i", model.vocab_size))
     out_stream.write(struct.pack("<i", model.nwords))
-    out_stream.write(struct.pack("<i", model.nwords))
-
-    # nlabels=0 <- no labels  we are in unsupervised mode
-    out_stream.write(struct.pack("<i", 0))
-
-    # Number of training steps
+    out_stream.write(struct.pack("<i", model.nlabels))
     out_stream.write(struct.pack("<q", model.ntokens))
 
-    # no prune_idx in unsupervised mode. Use -1 as a flag.
-    # (why not 0, why not use unsigned long long who knows)
-    out_stream.write(struct.pack("<q", -1))
+    # TODO: actually we want to support supervised so figure this out
+    out_stream.write(struct.pack("<q", model.pruneidx_size))
 
-    for word, count in model.raw_vocab.items():
+    for word, count in model.words.items():
         out_stream.write(word.encode(encoding))
-        out_stream.write(_END_OF_WORD_MARKER)
+        out_stream.write(_END_OF_STRING_FLAG)
         out_stream.write(struct.pack("<q", count))
         out_stream.write(_DICT_WORD_ENTRY_TYPE_MARKER)
 
-    # We are in unsupervised case, therefore prune_idx is empty, so we do not need to write
-    # anything else
+    for label, count in model.labels.items():
+        out_stream.write(label.encode(encoding))
+        out_stream.write(_END_OF_STRING_FLAG)
+        out_stream.write(struct.pack("<q", count))
+        out_stream.write(_DICT_LABEL_ENTRY_TYPE_MARKER)
+
+    # TODO: pruneidx here
 
 
 def _save_array(
@@ -513,10 +548,10 @@ def save(model: Model, out_stream: BinaryIO, encoding: str = "utf-8"):
 #     - nwords*
 #       - Word:  # 0x00-terminated string
 #         - *
-#           - 8b: char c
+#           - 8b: char c  # Most likely a utf-8 byte
 #         - 8b: 0x00  # (_END_OF_WORD_MARKER)
 #       - 64b: int64 count
-#       - 8b: int8 entry_type  # 0x00 (_DICT_WORD_ENTRY_TYPE_MARKER) for words
+#       - 8b: int8 entry_type  # 0x00 for words
 #     - nlabels*
 #       - Label:  # 0x00-terminated string
 #         - *
@@ -533,7 +568,7 @@ def save(model: Model, out_stream: BinaryIO, encoding: str = "utf-8"):
 #   - 8b: bool quant_input  # absent in old format
 #   - 64b: int64 m   # == num_vectors
 #   - 64b: int64 n   # == dim
-#   - (m*n*float_size)b: float32* data  # numpy-compatible don't worry about it kitten
+#   - (m*n*float_size)b: float32* data  # C-order don't worry about it kitten
 # - Output Vectors:  # aka hidden_output
 #   - 8b: bool quant_input  # absent in old format
 #   - 64b: int64 m

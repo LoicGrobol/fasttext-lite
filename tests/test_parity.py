@@ -14,7 +14,7 @@ def test_load_parity(model_path: pathlib.Path):
     with open(model_path, "rb") as in_stream:
         ftlt_model = load(in_stream, full_model=True)
 
-    for i, word in enumerate(ftlt_model.raw_vocab):
+    for i, word in enumerate(ftlt_model.words):
         assert ft_model.get_word_id(word) == i
 
     # FIXME: can we save memory here somehow?
