@@ -5,8 +5,8 @@ Copyright 2025, Morgan Grobol <morgan.grobol@tuta.com>.
 
 This library started from [Michael Penkov's implementation of the FastText binary format for
 Gensim](https://github.com/piskvorky/gensim/commit/32604bcab05947f0a1b6ce95717ecfa83e6d449b) and
-while a lot has changed since then, can be considered a modification of it and therefore has to keep
-its original licencing under LGPL v2.1 (see below for the full text).
+while a lot has changed since then, it can be considered a derivative of it and therefore has
+to keep its original licencing under LGPL v2.1 (see below for the full text).
 
 ## GNU Lesser General Public License
 
